@@ -1435,6 +1435,39 @@ function GeradorPropostas() {
   // item a item, pela mesma regra de "o mais recente vence" usada na
   // sincronização. Sem isso, dois aparelhos salvando em sequência fariam o
   // segundo apagar o que o primeiro acabou de adicionar.
+  // Restaurar um backup é diferente de uma gravação normal: a intenção
+  // explícita do usuário é "quero que fique como está neste arquivo". Por
+  // isso o item do backup sempre vence (não entra na disputa de "quem é
+  // mais recente" — ele nem tem essa data, exportarBackup não grava isso).
+  // O que já existe na nuvem e NÃO está no backup continua intacto, e cada
+  // item restaurado ganha uma data nova, para não perder de novo se este
+  // aparelho sincronizar com outro depois.
+  const restaurarListaDeBackup = async (chave, doBackup, campo) => {
+    let valorFinal = (doBackup || []).map(it => ({
+      ...it,
+      atualizadoEm: agoraISO()
+    }));
+    if (estaOnline()) {
+      const remoto = await buscarNuvem(chave);
+      if (Array.isArray(remoto)) {
+        const mapa = {};
+        remoto.forEach(it => {
+          if (it && it[campo] != null) mapa[it[campo]] = it;
+        });
+        valorFinal.forEach(it => {
+          mapa[it[campo]] = it;
+        }); // o do backup sobrescreve
+        valorFinal = Object.values(mapa);
+      }
+    }
+    const okLocal = gravarLocal(chave, valorFinal);
+    const okNuvem = await enviarNuvem(chave, valorFinal);
+    marcarPendente(chave, !okNuvem);
+    return {
+      ok: okLocal || okNuvem,
+      valorFinal
+    };
+  };
   const salvarDadoComFusao = async (chave, valorLocal, campo) => {
     let valorFinal = valorLocal;
     if (estaOnline()) {
@@ -2165,14 +2198,14 @@ function GeradorPropostas() {
           const cat = dados.catalogo.map(migrarItem);
           const {
             valorFinal
-          } = await salvarDadoComFusao(CHAVE_CATALOGO, cat, 'codigo');
+          } = await restaurarListaDeBackup(CHAVE_CATALOGO, cat, 'codigo');
           setCatalogo(valorFinal);
           restaurado.push(`${cat.length} itens`);
         }
         if (Array.isArray(dados.propostas)) {
           const {
             valorFinal
-          } = await salvarDadoComFusao(CHAVE_PROPOSTAS, dados.propostas, 'id');
+          } = await restaurarListaDeBackup(CHAVE_PROPOSTAS, dados.propostas, 'id');
           setPropostas(valorFinal);
           restaurado.push(`${dados.propostas.length} propostas`);
         }
