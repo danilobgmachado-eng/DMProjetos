@@ -1068,6 +1068,21 @@ const salvarDado = async (chave, valor) => {
 };
 
 // Lê do aparelho e, se houver internet, junta com o que está na nuvem.
+// Une as lápides locais com as da nuvem. Nunca escolhe só uma fonte: uma
+// exclusão recém-registrada pode ainda não ter chegado na nuvem quando
+// este trecho roda (e vice-versa em outro aparelho), então soma as duas,
+// ficando com a mais recente por item.
+const lerExcluidosUnidos = async () => {
+  const remoto = (await buscarNuvem(CHAVE_EXCLUIDOS)) || {};
+  const local = lerLocal(CHAVE_EXCLUIDOS) || {};
+  const unidos = {
+    ...remoto
+  };
+  Object.keys(local).forEach(k => {
+    if (!unidos[k] || local[k] > unidos[k]) unidos[k] = local[k];
+  });
+  return unidos;
+};
 const lerDado = async chave => {
   const local = lerLocal(chave);
   const remoto = await buscarNuvem(chave);
@@ -1085,7 +1100,7 @@ const lerDado = async chave => {
     gravarLocal(chave, valor);
     return valor;
   }
-  const excluidos = (await buscarNuvem(CHAVE_EXCLUIDOS)) || lerLocal(CHAVE_EXCLUIDOS) || {};
+  const excluidos = await lerExcluidosUnidos();
   const juntos = mesclarListas(local, remoto, campo, excluidos);
   gravarLocal(chave, juntos);
   return juntos;
@@ -1113,7 +1128,7 @@ const sincronizarPendentes = async () => {
     if (campo) {
       const remoto = await buscarNuvem(chave);
       if (remoto !== null) {
-        const excluidos = (await buscarNuvem(CHAVE_EXCLUIDOS)) || lerLocal(CHAVE_EXCLUIDOS) || {};
+        const excluidos = await lerExcluidosUnidos();
         paraEnviar = mesclarListas(local, remoto, campo, excluidos);
         gravarLocal(chave, paraEnviar);
       }
@@ -1157,7 +1172,12 @@ const carimbarMudancas = (nova, antiga, campo) => {
   });
 
   // registra o que sumiu
-  const agora = new Set(carimbada.map(i => i[campo]));
+  // IMPORTANTE: Object.keys() sempre devolve string. Os "id" das propostas
+  // são números (Date.now()). Sem converter para string aqui, "123" (chave)
+  // nunca bate com 123 (valor no Set) — toda proposta antiga parecia ter
+  // "sumido" e ganhava uma lápide de exclusão à toa, mesmo sem ninguém
+  // ter apagado nada. Essa era a causa real de propostas desaparecendo.
+  const agora = new Set(carimbada.map(i => String(i[campo])));
   const excluidos = lerLocal(CHAVE_EXCLUIDOS) || {};
   let mudouExcluidos = false;
   Object.keys(antes).forEach(k => {
@@ -1295,7 +1315,14 @@ function GeradorPropostas() {
       });
       setPropostas(propostasLimpas);
       if (propostasLimpas.length !== propostasBrutas.length) {
-        await salvarDado(CHAVE_PROPOSTAS, propostasLimpas);
+        // Precisa passar por carimbarMudancas para registrar uma lápide de
+        // verdade — só filtrar localmente não avisa a nuvem, e a próxima
+        // fusão traria o item de volta.
+        const carimbado = carimbarMudancas(propostasLimpas, propostasBrutas, 'id');
+        const {
+          valorFinal
+        } = await salvarDadoComFusao(CHAVE_PROPOSTAS, carimbado, 'id');
+        setPropostas(valorFinal);
       }
 
       // Converte o catálogo para o formato novo (preços por fornecedor +
@@ -1339,7 +1366,12 @@ function GeradorPropostas() {
       }
 
       // Garante que o que foi encontrado fique gravado no formato/local atual
-      if (cat) await salvarDado(CHAVE_CATALOGO, catMigrado);
+      if (cat) {
+        const {
+          valorFinal
+        } = await salvarDadoComFusao(CHAVE_CATALOGO, catMigrado, 'codigo');
+        setCatalogo(valorFinal);
+      }
       setCarregando(false);
     };
     carregar();
@@ -1396,10 +1428,37 @@ function GeradorPropostas() {
       window.removeEventListener('offline', aoDesconectar);
     };
   }, []);
+
+  // Grava uma LISTA (catálogo ou propostas) sem risco de um aparelho apagar
+  // o que outro aparelho acabou de salvar. Antes de sobrescrever a nuvem,
+  // busca o que está lá agora e funde com o que este aparelho quer gravar —
+  // item a item, pela mesma regra de "o mais recente vence" usada na
+  // sincronização. Sem isso, dois aparelhos salvando em sequência fariam o
+  // segundo apagar o que o primeiro acabou de adicionar.
+  const salvarDadoComFusao = async (chave, valorLocal, campo) => {
+    let valorFinal = valorLocal;
+    if (estaOnline()) {
+      const remoto = await buscarNuvem(chave);
+      if (remoto !== null) {
+        const excluidos = await lerExcluidosUnidos();
+        valorFinal = mesclarListas(valorLocal, remoto, campo, excluidos);
+      }
+    }
+    const okLocal = gravarLocal(chave, valorFinal);
+    const okNuvem = await enviarNuvem(chave, valorFinal);
+    marcarPendente(chave, !okNuvem);
+    return {
+      ok: okLocal || okNuvem,
+      valorFinal
+    };
+  };
   const salvarCatalogo = async novoCat => {
     const carimbado = carimbarMudancas(novoCat, catalogo, 'codigo');
-    setCatalogo(carimbado);
-    const ok = await salvarDado(CHAVE_CATALOGO, carimbado);
+    const {
+      ok,
+      valorFinal
+    } = await salvarDadoComFusao(CHAVE_CATALOGO, carimbado, 'codigo');
+    setCatalogo(valorFinal); // reflete também o que outro aparelho tenha salvo
     setErroStorage(!ok);
     atualizarPendencias();
   };
@@ -1431,8 +1490,11 @@ function GeradorPropostas() {
   };
   const salvarListaPropostas = async lista => {
     const carimbado = carimbarMudancas(lista, propostas, 'id');
-    setPropostas(carimbado);
-    const ok = await salvarDado(CHAVE_PROPOSTAS, carimbado);
+    const {
+      ok,
+      valorFinal
+    } = await salvarDadoComFusao(CHAVE_PROPOSTAS, carimbado, 'id');
+    setPropostas(valorFinal); // reflete também o que outro aparelho tenha salvo
     setErroStorage(!ok);
     atualizarPendencias();
     return ok;
@@ -2101,13 +2163,17 @@ function GeradorPropostas() {
         if (Array.isArray(dados.catalogo)) {
           // Garante o formato novo mesmo se o backup for antigo
           const cat = dados.catalogo.map(migrarItem);
-          setCatalogo(cat);
-          await salvarDado(CHAVE_CATALOGO, cat);
+          const {
+            valorFinal
+          } = await salvarDadoComFusao(CHAVE_CATALOGO, cat, 'codigo');
+          setCatalogo(valorFinal);
           restaurado.push(`${cat.length} itens`);
         }
         if (Array.isArray(dados.propostas)) {
-          setPropostas(dados.propostas);
-          await salvarDado(CHAVE_PROPOSTAS, dados.propostas);
+          const {
+            valorFinal
+          } = await salvarDadoComFusao(CHAVE_PROPOSTAS, dados.propostas, 'id');
+          setPropostas(valorFinal);
           restaurado.push(`${dados.propostas.length} propostas`);
         }
 
@@ -2226,9 +2292,15 @@ function GeradorPropostas() {
         onClick: () => abrirProposta(p),
         className: "py-1 px-3 bg-blue-600 text-white rounded text-xs font-bold"
       }, "📂 Abrir"), /*#__PURE__*/React.createElement("button", {
-        onClick: () => pedirConfirmacao(`prop-${p.id}`, () => excluirProposta(p.id)),
-        className: `py-1 px-3 rounded text-xs font-bold text-white ${confirmando === `prop-${p.id}` ? 'bg-red-800' : 'bg-red-600'}`
-      }, confirmando === `prop-${p.id}` ? 'Confirmar?' : '🗑️ Excluir')));
+        onClick: () => {
+          if (senhaHash && !desbloqueado) {
+            avisar('erro', '🔒 Digite a senha (aba Proposta ou Serviços) para poder excluir.');
+            return;
+          }
+          pedirConfirmacao(`prop-${p.id}`, () => excluirProposta(p.id));
+        },
+        className: `py-1 px-3 rounded text-xs font-bold text-white ${confirmando === `prop-${p.id}` ? 'bg-red-800' : senhaHash && !desbloqueado ? 'bg-gray-400' : 'bg-red-600'}`
+      }, confirmando === `prop-${p.id}` ? 'Confirmar?' : senhaHash && !desbloqueado ? '🔒 Excluir' : '🗑️ Excluir')));
     })), naLixeira.length > 0 && /*#__PURE__*/React.createElement("div", {
       className: "mt-4"
     }, /*#__PURE__*/React.createElement("button", {
@@ -2253,9 +2325,15 @@ function GeradorPropostas() {
       onClick: () => restaurarProposta(p.id),
       className: "py-1 px-3 bg-teal-600 text-white rounded text-xs font-bold"
     }, "♻️ Restaurar"), /*#__PURE__*/React.createElement("button", {
-      onClick: () => pedirConfirmacao(`prop-perm-${p.id}`, () => excluirPropostaPermanente(p.id)),
-      className: `py-1 px-3 rounded text-xs font-bold text-white ${confirmando === `prop-perm-${p.id}` ? 'bg-red-900' : 'bg-red-700'}`
-    }, confirmando === `prop-perm-${p.id}` ? 'Apagar de vez?' : '🗑️ Apagar para sempre')))))));
+      onClick: () => {
+        if (senhaHash && !desbloqueado) {
+          avisar('erro', '🔒 Digite a senha (aba Proposta ou Serviços) para poder apagar para sempre.');
+          return;
+        }
+        pedirConfirmacao(`prop-perm-${p.id}`, () => excluirPropostaPermanente(p.id));
+      },
+      className: `py-1 px-3 rounded text-xs font-bold text-white ${confirmando === `prop-perm-${p.id}` ? 'bg-red-900' : senhaHash && !desbloqueado ? 'bg-gray-400' : 'bg-red-700'}`
+    }, confirmando === `prop-perm-${p.id}` ? 'Apagar de vez?' : senhaHash && !desbloqueado ? '🔒 Apagar para sempre' : '🗑️ Apagar para sempre')))))));
   };
 
   // ---------- PROTEÇÃO DO VALOR DE SERVIÇO/TOTAL ----------
