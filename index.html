@@ -959,6 +959,7 @@ const CHAVE_PROPOSTAS = 'propostas';
 const CHAVE_PADROES = 'padroes'; // valores padrão de mão de obra e BDI para novas propostas
 const CHAVE_LOCAIS = 'locais'; // lista de fornecedores/locais de compra
 const CHAVE_SENHA = 'senhaProtegida'; // hash da senha que protege valor de serviço/total
+const DIAS_NA_LIXEIRA = 30; // por quanto tempo uma proposta apagada fica recuperável
 
 // Aviso importante: este app roda inteiro no navegador, sem servidor por
 // trás. Essa senha impede que alguém veja os valores casualmente na tela —
@@ -1250,6 +1251,7 @@ function GeradorPropostas() {
   const [senhaDigitada, setSenhaDigitada] = useState('');
   const [senhaNova, setSenhaNova] = useState('');
   const [senhaNovaConfirma, setSenhaNovaConfirma] = useState('');
+  const [lixeiraAberta, setLixeiraAberta] = useState(false);
   const [destaque, setDestaque] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [erroStorage, setErroStorage] = useState(false);
@@ -1283,11 +1285,23 @@ function GeradorPropostas() {
       const senhaSalva = await lerDado(CHAVE_SENHA);
       setSenhaHash(senhaSalva || '');
 
+      // Limpeza automática e silenciosa: proposta na lixeira há mais de
+      // 30 dias some de vez, para não acumular para sempre.
+      const propostasBrutas = props || [];
+      const limiteMs = DIAS_NA_LIXEIRA * 24 * 60 * 60 * 1000;
+      const propostasLimpas = propostasBrutas.filter(p => {
+        if (!p.excluidaEm) return true;
+        return Date.now() - new Date(p.excluidaEm).getTime() < limiteMs;
+      });
+      setPropostas(propostasLimpas);
+      if (propostasLimpas.length !== propostasBrutas.length) {
+        await salvarDado(CHAVE_PROPOSTAS, propostasLimpas);
+      }
+
       // Converte o catálogo para o formato novo (preços por fornecedor +
       // estoque). Itens já no formato novo passam sem alteração.
       const catMigrado = (cat || INICIAL).map(migrarItem);
       setCatalogo(catMigrado);
-      setPropostas(props || []);
 
       // Locais de compra: usa os salvos, e garante que qualquer fornecedor
       // que já apareça em algum item do catálogo esteja na lista.
@@ -1926,10 +1940,29 @@ function GeradorPropostas() {
     setBdi(p.bdi || 0);
     setAba('proposta');
   };
+
+  // Não apaga de verdade: marca a data de exclusão e mantém guardada.
+  // Some da lista principal, mas continua recuperável na lixeira.
   const excluirProposta = async id => {
+    const lista = propostas.map(p => p.id === id ? {
+      ...p,
+      excluidaEm: agoraISO()
+    } : p);
+    await salvarListaPropostas(lista);
+    avisar('sucesso', `Proposta movida para a lixeira. Fica lá por ${DIAS_NA_LIXEIRA} dias, com opção de restaurar.`);
+  };
+  const restaurarProposta = async id => {
+    const lista = propostas.map(p => p.id === id ? {
+      ...p,
+      excluidaEm: null
+    } : p);
+    await salvarListaPropostas(lista);
+    avisar('sucesso', 'Proposta restaurada.');
+  };
+  const excluirPropostaPermanente = async id => {
     const lista = propostas.filter(p => p.id !== id);
     await salvarListaPropostas(lista);
-    avisar('sucesso', 'Proposta excluída.');
+    avisar('sucesso', 'Proposta apagada para sempre.');
   };
   const novaPropostaAcao = () => {
     setNumProposta('');
@@ -2154,42 +2187,76 @@ function GeradorPropostas() {
     }),
     className: `py-3 rounded-lg font-bold text-sm text-white ${confirmando === 'limpar' ? 'bg-red-800' : 'bg-red-600'}`
   }, confirmando === 'limpar' ? 'Toque p/ confirmar' : '🗑️ Limpar'));
-  const PropostasSalvas = () => /*#__PURE__*/React.createElement("div", {
-    className: "mt-6"
-  }, /*#__PURE__*/React.createElement("h3", {
-    className: "font-bold text-gray-700 text-sm mb-2"
-  }, "📋 Propostas salvas (", propostas.length, ")"), propostas.length === 0 ? /*#__PURE__*/React.createElement("p", {
-    className: "text-xs text-gray-500 bg-white p-3 rounded-lg border border-gray-300"
-  }, "Nenhuma proposta salva ainda. Clique em \"💾 Salvar\" acima.") : /*#__PURE__*/React.createElement("div", {
-    className: "space-y-2"
-  }, propostas.map(p => {
-    const qtdItens = (p.itens || []).length;
-    const qtdServicos = (p.servicos || []).length;
-    const subtotalSeguro = Number(p.subtotal ?? 0);
-    const totalFinalSeguro = Number(p.totalFinal ?? p.subtotal ?? 0);
+  const PropostasSalvas = () => {
+    const visiveis = propostas.filter(p => !p.excluidaEm);
+    const naLixeira = propostas.filter(p => p.excluidaEm);
+    const diasRestantes = excluidaEm => {
+      const passados = (Date.now() - new Date(excluidaEm).getTime()) / (24 * 60 * 60 * 1000);
+      return Math.max(0, Math.ceil(DIAS_NA_LIXEIRA - passados));
+    };
     return /*#__PURE__*/React.createElement("div", {
+      className: "mt-6"
+    }, /*#__PURE__*/React.createElement("h3", {
+      className: "font-bold text-gray-700 text-sm mb-2"
+    }, "📋 Propostas salvas (", visiveis.length, ")"), visiveis.length === 0 ? /*#__PURE__*/React.createElement("p", {
+      className: "text-xs text-gray-500 bg-white p-3 rounded-lg border border-gray-300"
+    }, "Nenhuma proposta salva ainda. Clique em \"💾 Salvar\" acima.") : /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2"
+    }, visiveis.map(p => {
+      const qtdItens = (p.itens || []).length;
+      const qtdServicos = (p.servicos || []).length;
+      const subtotalSeguro = Number(p.subtotal ?? 0);
+      const totalFinalSeguro = Number(p.totalFinal ?? p.subtotal ?? 0);
+      return /*#__PURE__*/React.createElement("div", {
+        key: p.id || p.numero,
+        className: "bg-white p-3 rounded-lg border border-gray-300 flex justify-between items-start gap-2"
+      }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+        className: "font-bold text-sm text-gray-800"
+      }, "📄 ", p.numero || '(sem número)'), p.cliente && /*#__PURE__*/React.createElement("p", {
+        className: "text-xs text-gray-600"
+      }, "👤 ", p.cliente), /*#__PURE__*/React.createElement("p", {
+        className: "text-xs text-gray-500"
+      }, "📅 ", p.data, " · ", qtdItens, " itens · ", qtdServicos, " serviços"), senhaHash && !desbloqueado ? /*#__PURE__*/React.createElement("p", {
+        className: "text-xs text-gray-400 italic mt-1"
+      }, "🔒 Total protegido") : /*#__PURE__*/React.createElement("p", {
+        className: "text-xs text-gray-700 mt-1 font-bold"
+      }, p.bdi > 0 ? `Total com BDI: R$ ${totalFinalSeguro.toFixed(2)}` : `Total: R$ ${subtotalSeguro.toFixed(2)}`)), /*#__PURE__*/React.createElement("div", {
+        className: "flex flex-col gap-1 shrink-0"
+      }, /*#__PURE__*/React.createElement("button", {
+        onClick: () => abrirProposta(p),
+        className: "py-1 px-3 bg-blue-600 text-white rounded text-xs font-bold"
+      }, "📂 Abrir"), /*#__PURE__*/React.createElement("button", {
+        onClick: () => pedirConfirmacao(`prop-${p.id}`, () => excluirProposta(p.id)),
+        className: `py-1 px-3 rounded text-xs font-bold text-white ${confirmando === `prop-${p.id}` ? 'bg-red-800' : 'bg-red-600'}`
+      }, confirmando === `prop-${p.id}` ? 'Confirmar?' : '🗑️ Excluir')));
+    })), naLixeira.length > 0 && /*#__PURE__*/React.createElement("div", {
+      className: "mt-4"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => setLixeiraAberta(!lixeiraAberta),
+      className: "w-full py-2 bg-gray-200 text-gray-700 rounded-lg text-xs font-bold flex items-center justify-center gap-1"
+    }, "🗑️ Lixeira (", naLixeira.length, ") ", lixeiraAberta ? '▲' : '▼'), lixeiraAberta && /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2 mt-2"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-xs text-gray-500 px-1"
+    }, "Propostas apagadas ficam aqui por ", DIAS_NA_LIXEIRA, " dias antes de sumir de vez."), naLixeira.map(p => /*#__PURE__*/React.createElement("div", {
       key: p.id || p.numero,
-      className: "bg-white p-3 rounded-lg border border-gray-300 flex justify-between items-start gap-2"
+      className: "bg-gray-50 p-3 rounded-lg border border-gray-300 flex justify-between items-start gap-2 opacity-80"
     }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
-      className: "font-bold text-sm text-gray-800"
+      className: "font-bold text-sm text-gray-600"
     }, "📄 ", p.numero || '(sem número)'), p.cliente && /*#__PURE__*/React.createElement("p", {
-      className: "text-xs text-gray-600"
-    }, "👤 ", p.cliente), /*#__PURE__*/React.createElement("p", {
       className: "text-xs text-gray-500"
-    }, "📅 ", p.data, " · ", qtdItens, " itens · ", qtdServicos, " serviços"), senhaHash && !desbloqueado ? /*#__PURE__*/React.createElement("p", {
-      className: "text-xs text-gray-400 italic mt-1"
-    }, "🔒 Total protegido") : /*#__PURE__*/React.createElement("p", {
-      className: "text-xs text-gray-700 mt-1 font-bold"
-    }, p.bdi > 0 ? `Total com BDI: R$ ${totalFinalSeguro.toFixed(2)}` : `Total: R$ ${subtotalSeguro.toFixed(2)}`)), /*#__PURE__*/React.createElement("div", {
+    }, "👤 ", p.cliente), /*#__PURE__*/React.createElement("p", {
+      className: "text-xs text-gray-400"
+    }, "🗑️ Apagada há ", Math.floor((Date.now() - new Date(p.excluidaEm).getTime()) / 86400000), " dia(s) · some em ", diasRestantes(p.excluidaEm), " dia(s)")), /*#__PURE__*/React.createElement("div", {
       className: "flex flex-col gap-1 shrink-0"
     }, /*#__PURE__*/React.createElement("button", {
-      onClick: () => abrirProposta(p),
-      className: "py-1 px-3 bg-blue-600 text-white rounded text-xs font-bold"
-    }, "📂 Abrir"), /*#__PURE__*/React.createElement("button", {
-      onClick: () => pedirConfirmacao(`prop-${p.id}`, () => excluirProposta(p.id)),
-      className: `py-1 px-3 rounded text-xs font-bold text-white ${confirmando === `prop-${p.id}` ? 'bg-red-800' : 'bg-red-600'}`
-    }, confirmando === `prop-${p.id}` ? 'Confirmar?' : '🗑️ Excluir')));
-  })));
+      onClick: () => restaurarProposta(p.id),
+      className: "py-1 px-3 bg-teal-600 text-white rounded text-xs font-bold"
+    }, "♻️ Restaurar"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => pedirConfirmacao(`prop-perm-${p.id}`, () => excluirPropostaPermanente(p.id)),
+      className: `py-1 px-3 rounded text-xs font-bold text-white ${confirmando === `prop-perm-${p.id}` ? 'bg-red-900' : 'bg-red-700'}`
+    }, confirmando === `prop-perm-${p.id}` ? 'Apagar de vez?' : '🗑️ Apagar para sempre')))))));
+  };
 
   // ---------- PROTEÇÃO DO VALOR DE SERVIÇO/TOTAL ----------
   const definirSenha = async () => {
@@ -2339,7 +2406,7 @@ function GeradorPropostas() {
     className: `text-sm font-bold p-3 rounded-lg mb-4 border-2 ${mensagem.tipo === 'erro' ? 'bg-red-50 border-red-300 text-red-700' : 'bg-green-50 border-green-300 text-green-700'}`
   }, mensagem.texto), /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 mb-4"
-  }, tab('catalogo', `📦 Catálogo (${catalogo.length})`, 'bg-blue-600'), tab('proposta', `📄 Proposta (${proposta.length})`, 'bg-green-600'), tab('servicos', senhaHash && !desbloqueado ? '🔧 Serviços 🔒' : '🔧 Serviços', 'bg-orange-600'), tab('estoque', '🏗️ Estoque', 'bg-teal-600'), tab('historico', `📋 Histórico (${propostas.length})`, 'bg-purple-600')), aba === 'catalogo' && revisao && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, tab('catalogo', `📦 Catálogo (${catalogo.length})`, 'bg-blue-600'), tab('proposta', `📄 Proposta (${proposta.length})`, 'bg-green-600'), tab('servicos', senhaHash && !desbloqueado ? '🔧 Serviços 🔒' : '🔧 Serviços', 'bg-orange-600'), tab('estoque', '🏗️ Estoque', 'bg-teal-600'), tab('historico', `📋 Histórico (${propostas.filter(p => !p.excluidaEm).length})`, 'bg-purple-600')), aba === 'catalogo' && revisao && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "bg-yellow-50 p-4 rounded-lg mb-4 border-2 border-yellow-400"
   }, /*#__PURE__*/React.createElement("h3", {
     className: "font-bold mb-1"
