@@ -958,6 +958,17 @@ const CHAVE_CATALOGO_ANTIGA = 'cat'; // nome usado em versão bem antiga do app
 const CHAVE_PROPOSTAS = 'propostas';
 const CHAVE_PADROES = 'padroes'; // valores padrão de mão de obra e BDI para novas propostas
 const CHAVE_LOCAIS = 'locais'; // lista de fornecedores/locais de compra
+const CHAVE_SENHA = 'senhaProtegida'; // hash da senha que protege valor de serviço/total
+
+// Aviso importante: este app roda inteiro no navegador, sem servidor por
+// trás. Essa senha impede que alguém veja os valores casualmente na tela —
+// não é segurança de verdade, já que o código roda no aparelho de quem usa.
+// Por isso guardamos só o hash (SHA-256), nunca a senha em texto puro.
+const hashSenha = async texto => {
+  if (!texto) return '';
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(texto));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+};
 
 // Banco de dados na nuvem (Firebase Realtime Database). Esta é a fonte
 // "oficial" dos dados: qualquer navegador ou aparelho que abrir o app lê e
@@ -1231,6 +1242,14 @@ function GeradorPropostas() {
   const [online, setOnline] = useState(estaOnline());
   const [pendencias, setPendencias] = useState(0);
   const [sincronizando, setSincronizando] = useState(false);
+
+  // ---------- PROTEÇÃO DO VALOR DE SERVIÇO/TOTAL ----------
+  const [senhaHash, setSenhaHash] = useState('');
+  const [desbloqueado, setDesbloqueado] = useState(false);
+  const [configSenhaAberta, setConfigSenhaAberta] = useState(false);
+  const [senhaDigitada, setSenhaDigitada] = useState('');
+  const [senhaNova, setSenhaNova] = useState('');
+  const [senhaNovaConfirma, setSenhaNovaConfirma] = useState('');
   const [destaque, setDestaque] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [erroStorage, setErroStorage] = useState(false);
@@ -1261,6 +1280,8 @@ function GeradorPropostas() {
       const props = await lerDado(CHAVE_PROPOSTAS);
       const padroes = await lerDado(CHAVE_PADROES);
       const locaisSalvos = await lerDado(CHAVE_LOCAIS);
+      const senhaSalva = await lerDado(CHAVE_SENHA);
+      setSenhaHash(senhaSalva || '');
 
       // Converte o catálogo para o formato novo (preços por fornecedor +
       // estoque). Itens já no formato novo passam sem alteração.
@@ -2155,7 +2176,9 @@ function GeradorPropostas() {
       className: "text-xs text-gray-600"
     }, "👤 ", p.cliente), /*#__PURE__*/React.createElement("p", {
       className: "text-xs text-gray-500"
-    }, "📅 ", p.data, " · ", qtdItens, " itens · ", qtdServicos, " serviços"), /*#__PURE__*/React.createElement("p", {
+    }, "📅 ", p.data, " · ", qtdItens, " itens · ", qtdServicos, " serviços"), senhaHash && !desbloqueado ? /*#__PURE__*/React.createElement("p", {
+      className: "text-xs text-gray-400 italic mt-1"
+    }, "🔒 Total protegido") : /*#__PURE__*/React.createElement("p", {
       className: "text-xs text-gray-700 mt-1 font-bold"
     }, p.bdi > 0 ? `Total com BDI: R$ ${totalFinalSeguro.toFixed(2)}` : `Total: R$ ${subtotalSeguro.toFixed(2)}`)), /*#__PURE__*/React.createElement("div", {
       className: "flex flex-col gap-1 shrink-0"
@@ -2167,34 +2190,124 @@ function GeradorPropostas() {
       className: `py-1 px-3 rounded text-xs font-bold text-white ${confirmando === `prop-${p.id}` ? 'bg-red-800' : 'bg-red-600'}`
     }, confirmando === `prop-${p.id}` ? 'Confirmar?' : '🗑️ Excluir')));
   })));
-  const Totais = () => /*#__PURE__*/React.createElement("div", {
-    className: "space-y-2 mt-4"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "bg-green-50 p-4 rounded-lg border-2 border-green-300 text-sm"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-gray-700"
-  }, "Itens: R$ ", totalItens.toFixed(2)), /*#__PURE__*/React.createElement("p", {
-    className: "text-gray-700"
-  }, "Serviços: R$ ", totalServicos.toFixed(2)), /*#__PURE__*/React.createElement("p", {
-    className: "font-bold text-green-700 text-base mt-1"
-  }, "Subtotal: R$ ", subtotal.toFixed(2))), /*#__PURE__*/React.createElement("div", {
-    className: "bg-blue-50 p-4 rounded-lg border-2 border-blue-300"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "block font-bold text-sm mb-2"
-  }, "💰 BDI (%)"), /*#__PURE__*/React.createElement("input", {
-    type: "number",
-    step: "0.01",
-    min: "0",
-    value: bdi,
-    onChange: e => setBdi(parseFloat(e.target.value) || 0),
-    className: "w-full p-2 border border-blue-300 rounded"
-  }), bdi > 0 && /*#__PURE__*/React.createElement("p", {
-    className: "text-sm text-blue-700 mt-2"
-  }, "Valor do BDI: R$ ", valorBdi.toFixed(2))), bdi > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "bg-amber-50 p-4 rounded-lg border-2 border-amber-400"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "font-bold text-amber-700 text-lg"
-  }, "TOTAL COM BDI: R$ ", totalFinal.toFixed(2))));
+
+  // ---------- PROTEÇÃO DO VALOR DE SERVIÇO/TOTAL ----------
+  const definirSenha = async () => {
+    if (senhaNova.length < 4) return avisar('erro', 'Use pelo menos 4 caracteres.');
+    if (senhaNova !== senhaNovaConfirma) return avisar('erro', 'As senhas digitadas são diferentes.');
+    const hash = await hashSenha(senhaNova);
+    setSenhaHash(hash);
+    await salvarDado(CHAVE_SENHA, hash);
+    setDesbloqueado(true); // acabou de definir, faz sentido já deixar visível
+    setSenhaNova('');
+    setSenhaNovaConfirma('');
+    setConfigSenhaAberta(false);
+    avisar('sucesso', 'Valores protegidos por senha.');
+  };
+  const desbloquear = async () => {
+    const tentativa = await hashSenha(senhaDigitada);
+    if (tentativa === senhaHash) {
+      setDesbloqueado(true);
+      setSenhaDigitada('');
+    } else {
+      avisar('erro', 'Senha incorreta.');
+    }
+  };
+  const removerSenha = async () => {
+    setSenhaHash('');
+    setDesbloqueado(false);
+    await salvarDado(CHAVE_SENHA, '');
+    setConfigSenhaAberta(false);
+    avisar('sucesso', 'Proteção removida.');
+  };
+  const Totais = () => {
+    const protegido = !!senhaHash && !desbloqueado;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "space-y-2 mt-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "bg-green-50 p-4 rounded-lg border-2 border-green-300 text-sm"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-gray-700"
+    }, "Itens: R$ ", totalItens.toFixed(2)), protegido ? /*#__PURE__*/React.createElement("p", {
+      className: "text-gray-400 italic mt-1"
+    }, "🔒 Serviços — protegido por senha") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", {
+      className: "text-gray-700"
+    }, "Serviços: R$ ", totalServicos.toFixed(2)), /*#__PURE__*/React.createElement("p", {
+      className: "font-bold text-green-700 text-base mt-1"
+    }, "Subtotal: R$ ", subtotal.toFixed(2)))), /*#__PURE__*/React.createElement("div", {
+      className: "bg-blue-50 p-4 rounded-lg border-2 border-blue-300"
+    }, /*#__PURE__*/React.createElement("label", {
+      className: "block font-bold text-sm mb-2"
+    }, "💰 BDI (%)"), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      step: "0.01",
+      min: "0",
+      value: bdi,
+      onChange: e => setBdi(parseFloat(e.target.value) || 0),
+      className: "w-full p-2 border border-blue-300 rounded"
+    }), bdi > 0 && !protegido && /*#__PURE__*/React.createElement("p", {
+      className: "text-sm text-blue-700 mt-2"
+    }, "Valor do BDI: R$ ", valorBdi.toFixed(2))), bdi > 0 && (protegido ? /*#__PURE__*/React.createElement("div", {
+      className: "bg-gray-100 p-4 rounded-lg border-2 border-gray-300 text-center"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "font-bold text-gray-500"
+    }, "🔒 Total protegido por senha")) : /*#__PURE__*/React.createElement("div", {
+      className: "bg-amber-50 p-4 rounded-lg border-2 border-amber-400"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "font-bold text-amber-700 text-lg"
+    }, "TOTAL COM BDI: R$ ", totalFinal.toFixed(2)))), !senhaHash && !configSenhaAberta && /*#__PURE__*/React.createElement("button", {
+      onClick: () => setConfigSenhaAberta(true),
+      className: "w-full py-2 bg-gray-200 text-gray-700 rounded text-xs font-bold"
+    }, "🔒 Proteger valor de serviço e total com senha"), !senhaHash && configSenhaAberta && /*#__PURE__*/React.createElement("div", {
+      className: "bg-white p-3 rounded-lg border-2 border-gray-300"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-xs font-bold text-gray-700 mb-2"
+    }, "Definir senha"), /*#__PURE__*/React.createElement("input", {
+      type: "password",
+      placeholder: "Nova senha (mín. 4 caracteres)",
+      value: senhaNova,
+      onChange: e => setSenhaNova(e.target.value),
+      className: "w-full p-2 mb-2 border border-gray-300 rounded text-sm"
+    }), /*#__PURE__*/React.createElement("input", {
+      type: "password",
+      placeholder: "Confirme a senha",
+      value: senhaNovaConfirma,
+      onChange: e => setSenhaNovaConfirma(e.target.value),
+      className: "w-full p-2 mb-2 border border-gray-300 rounded text-sm"
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "flex gap-2"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: definirSenha,
+      className: "flex-1 py-2 bg-gray-700 text-white rounded font-bold text-xs"
+    }, "Definir senha"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setConfigSenhaAberta(false),
+      className: "py-2 px-3 bg-gray-200 text-gray-700 rounded text-xs"
+    }, "Cancelar"))), senhaHash && !desbloqueado && /*#__PURE__*/React.createElement("div", {
+      className: "bg-white p-3 rounded-lg border-2 border-gray-300"
+    }, /*#__PURE__*/React.createElement("p", {
+      className: "text-xs font-bold text-gray-700 mb-2"
+    }, "🔒 Digite a senha para ver os valores"), /*#__PURE__*/React.createElement("div", {
+      className: "flex gap-2"
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "password",
+      placeholder: "Senha",
+      value: senhaDigitada,
+      onChange: e => setSenhaDigitada(e.target.value),
+      onKeyDown: e => e.key === 'Enter' && desbloquear(),
+      className: "flex-1 p-2 border border-gray-300 rounded text-sm"
+    }), /*#__PURE__*/React.createElement("button", {
+      onClick: desbloquear,
+      className: "py-2 px-4 bg-gray-700 text-white rounded font-bold text-xs"
+    }, "Desbloquear"))), senhaHash && desbloqueado && /*#__PURE__*/React.createElement("div", {
+      className: "flex gap-2"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => setDesbloqueado(false),
+      className: "flex-1 py-2 bg-gray-200 text-gray-700 rounded text-xs font-bold"
+    }, "🔒 Bloquear de novo"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => pedirConfirmacao('remover-senha-valores', removerSenha),
+      className: `py-2 px-3 rounded text-xs font-bold text-white ${confirmando === 'remover-senha-valores' ? 'bg-red-800' : 'bg-red-500'}`
+    }, confirmando === 'remover-senha-valores' ? 'Confirmar?' : '🗑️ Remover proteção')));
+  };
   const tab = (id, label, cor) => /*#__PURE__*/React.createElement("button", {
     onClick: () => setAba(id),
     className: `flex-1 py-3 px-2 rounded-lg font-bold text-xs ${aba === id ? `${cor} text-white` : 'bg-gray-300 text-gray-800'}`
@@ -2226,7 +2339,7 @@ function GeradorPropostas() {
     className: `text-sm font-bold p-3 rounded-lg mb-4 border-2 ${mensagem.tipo === 'erro' ? 'bg-red-50 border-red-300 text-red-700' : 'bg-green-50 border-green-300 text-green-700'}`
   }, mensagem.texto), /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 mb-4"
-  }, tab('catalogo', `📦 Catálogo (${catalogo.length})`, 'bg-blue-600'), tab('proposta', `📄 Proposta (${proposta.length})`, 'bg-green-600'), tab('servicos', '🔧 Serviços', 'bg-orange-600'), tab('estoque', '🏗️ Estoque', 'bg-teal-600'), tab('historico', `📋 Histórico (${propostas.length})`, 'bg-purple-600')), aba === 'catalogo' && revisao && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, tab('catalogo', `📦 Catálogo (${catalogo.length})`, 'bg-blue-600'), tab('proposta', `📄 Proposta (${proposta.length})`, 'bg-green-600'), tab('servicos', senhaHash && !desbloqueado ? '🔧 Serviços 🔒' : '🔧 Serviços', 'bg-orange-600'), tab('estoque', '🏗️ Estoque', 'bg-teal-600'), tab('historico', `📋 Histórico (${propostas.length})`, 'bg-purple-600')), aba === 'catalogo' && revisao && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "bg-yellow-50 p-4 rounded-lg mb-4 border-2 border-yellow-400"
   }, /*#__PURE__*/React.createElement("h3", {
     className: "font-bold mb-1"
@@ -2721,7 +2834,27 @@ function GeradorPropostas() {
       onClick: () => mudarEstoque(item.codigo, (Number(item.estoque) || 0) + 1),
       className: "py-2 px-4 bg-teal-600 text-white rounded font-bold"
     }, "+"))))));
-  })()), aba === 'servicos' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  })()), aba === 'servicos' && /*#__PURE__*/React.createElement("div", null, senhaHash && !desbloqueado ? /*#__PURE__*/React.createElement("div", {
+    className: "bg-white p-4 rounded-lg border-2 border-gray-300 text-center"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-3xl mb-2"
+  }, "🔒"), /*#__PURE__*/React.createElement("p", {
+    className: "font-bold text-gray-700 mb-1"
+  }, "Diárias protegidas por senha"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-500 mb-3"
+  }, "Os valores de mão de obra desta empresa ficam escondidos até você digitar a senha."), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2 max-w-xs mx-auto"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    placeholder: "Senha",
+    value: senhaDigitada,
+    onChange: e => setSenhaDigitada(e.target.value),
+    onKeyDown: e => e.key === 'Enter' && desbloquear(),
+    className: "flex-1 p-2 border border-gray-300 rounded text-sm"
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: desbloquear,
+    className: "py-2 px-4 bg-gray-700 text-white rounded font-bold text-xs"
+  }, "Desbloquear"))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "bg-purple-50 p-3 rounded-lg mb-3 border-2 border-purple-300 flex items-center justify-between gap-2"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-600"
@@ -2757,7 +2890,10 @@ function GeradorPropostas() {
     className: "text-sm bg-orange-50 p-2 rounded mt-2"
   }, "Total: ", /*#__PURE__*/React.createElement("span", {
     className: "font-bold text-orange-700"
-  }, "R$ ", (s.valorDiario * s.dias).toFixed(2)))))), Totais(), Botoes(), PropostasSalvas()), aba === 'historico' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "R$ ", (s.valorDiario * s.dias).toFixed(2)))))), senhaHash && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setDesbloqueado(false),
+    className: "w-full mt-3 py-2 bg-gray-200 text-gray-700 rounded text-xs font-bold"
+  }, "🔒 Bloquear de novo")), Totais(), Botoes(), PropostasSalvas()), aba === 'historico' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "bg-white p-4 rounded-lg border-2 border-gray-300 mb-4"
   }, /*#__PURE__*/React.createElement("p", {
     className: "font-bold text-sm text-gray-800 mb-1"
