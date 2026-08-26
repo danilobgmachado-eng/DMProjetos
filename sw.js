@@ -1,6 +1,6 @@
 // Service worker do Gerador de Propostas
 // Guarda o app inteiro no aparelho para abrir sem internet.
-const CACHE = 'propostas-dm-e1213929';
+const CACHE = 'propostas-dm-ef9622bc';
 const ARQUIVOS = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', (e) => {
@@ -22,18 +22,19 @@ self.addEventListener('fetch', (e) => {
   if (url.hostname.indexOf('firebaseio.com') !== -1) return;
   if (e.request.method !== 'GET') return;
 
+  // Rede primeiro, cache como reserva — nunca o contrário. Assim, sempre
+  // que houver internet, o app pega a versão mais nova (com as correções
+  // mais recentes) em vez de continuar preso numa cópia antiga guardada
+  // no aparelho. Offline de verdade é o ÚNICO caso em que usa o cache.
   e.respondWith(
-    caches.match(e.request).then((guardado) => {
-      const daRede = fetch(e.request)
-        .then((resp) => {
-          if (resp && resp.status === 200 && resp.type === 'basic') {
-            const copia = resp.clone();
-            caches.open(CACHE).then((c) => c.put(e.request, copia));
-          }
-          return resp;
-        })
-        .catch(() => guardado);
-      return guardado || daRede;
-    })
+    fetch(e.request)
+      .then((resp) => {
+        if (resp && resp.status === 200 && resp.type === 'basic') {
+          const copia = resp.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copia));
+        }
+        return resp;
+      })
+      .catch(() => caches.match(e.request))
   );
 });
