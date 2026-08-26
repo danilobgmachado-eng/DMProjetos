@@ -1,6 +1,6 @@
 // Service worker do Gerador de Propostas
 // Guarda o app inteiro no aparelho para abrir sem internet.
-const CACHE = 'propostas-dm-ef9622bc';
+const CACHE = 'propostas-dm-0a15170e';
 const ARQUIVOS = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', (e) => {

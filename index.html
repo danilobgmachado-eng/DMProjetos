@@ -959,6 +959,7 @@ const CHAVE_PROPOSTAS = 'propostas';
 const CHAVE_PADROES = 'padroes'; // valores padrão de mão de obra e BDI para novas propostas
 const CHAVE_LOCAIS = 'locais'; // lista de fornecedores/locais de compra
 const CHAVE_SENHA = 'senhaProtegida'; // hash da senha que protege valor de serviço/total
+const CHAVE_LIMPEZA_LAPIDES = 'limpeza_lapides_2026_08_26'; // roda uma vez só, ver comentário abaixo
 const DIAS_NA_LIXEIRA = 30; // por quanto tempo uma proposta apagada fica recuperável
 
 // Aviso importante: este app roda inteiro no navegador, sem servidor por
@@ -1288,6 +1289,30 @@ function GeradorPropostas() {
   });
   useEffect(() => {
     const carregar = async () => {
+      // CORREÇÃO ÚNICA, roda antes de qualquer outra leitura: uma versão
+      // anterior do app, por um bug já corrigido, gravou "lápides" de
+      // exclusão erradas para itens que nunca foram apagados de verdade.
+      // Elas ficaram inofensivas até o app passar a fundir com a nuvem
+      // antes de salvar (correção necessária para não perder trabalho
+      // entre aparelhos) — e aí essas lápides velhas começaram a apagar
+      // propostas por engano. Isso limpa esse lixo uma única vez por
+      // aparelho, antes que qualquer lista seja lida (senão a própria
+      // leitura do catálogo/propostas logo abaixo já viria contaminada).
+      // A proteção contra um item "ressuscitar" depois de apagado de vez
+      // continua valendo para exclusões novas, só as marcas antigas (de
+      // antes desta correção) são descartadas.
+      // Verifica tanto o aparelho quanto a nuvem: sem isso, reinstalar o
+      // app (ou usar outro aparelho) faria essa limpeza rodar de novo e
+      // apagar exclusões de verdade feitas depois da primeira vez.
+      const jaLimpou = lerLocal(CHAVE_LIMPEZA_LAPIDES) || (await buscarNuvem(CHAVE_LIMPEZA_LAPIDES));
+      if (!jaLimpou) {
+        gravarLocal(CHAVE_EXCLUIDOS, {});
+        await enviarNuvem(CHAVE_EXCLUIDOS, {});
+        gravarLocal(CHAVE_LIMPEZA_LAPIDES, agoraISO());
+        await enviarNuvem(CHAVE_LIMPEZA_LAPIDES, agoraISO());
+      } else if (!lerLocal(CHAVE_LIMPEZA_LAPIDES)) {
+        gravarLocal(CHAVE_LIMPEZA_LAPIDES, jaLimpou);
+      }
       let cat = await lerDado(CHAVE_CATALOGO);
 
       // MIGRAÇÃO: versões bem antigas do app usavam a chave 'cat' só no
@@ -2849,7 +2874,20 @@ function GeradorPropostas() {
   }, "Salvar como nova")), /*#__PURE__*/React.createElement("input", {
     placeholder: "Número / nome da proposta",
     value: numProposta,
-    onChange: e => setNumProposta(e.target.value),
+    onChange: e => {
+      const novoValor = e.target.value;
+      setNumProposta(novoValor);
+      // Se o número digitado deixou de bater com o da proposta que
+      // estava aberta, isso é sinal de que agora é OUTRA proposta —
+      // sem isso, "Salvar" continuaria atualizando a antiga no
+      // lugar de criar uma nova (foi assim que sumiram propostas:
+      // criar a 001, salvar, e sem clicar em "Nova" já emendar
+      // direto na 002 apagava a 001).
+      if (propostaEditandoId != null) {
+        const atual = propostas.find(p => p.id === propostaEditandoId);
+        if (atual && (atual.numero || '') !== novoValor) setPropostaEditandoId(null);
+      }
+    },
     className: "w-full p-3 border border-gray-300 rounded-lg mb-2"
   }), /*#__PURE__*/React.createElement("input", {
     placeholder: "Cliente",
