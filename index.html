@@ -44,7 +44,9 @@ table{border-collapse:collapse}
 .bg-red-500{background-color:#ef4444}
 .bg-red-50{background-color:#fef2f2}
 .bg-red-600{background-color:#dc2626}
+.bg-red-700{background-color:#b91c1c}
 .bg-red-800{background-color:#991b1b}
+.bg-red-900{background-color:#7f1d1d}
 .bg-teal-50{background-color:#f0fdfa}
 .bg-teal-600{background-color:#0d9488}
 .bg-teal-700{background-color:#0f766e}
@@ -56,6 +58,7 @@ table{border-collapse:collapse}
 .border-amber-300{border-color:#fcd34d}
 .border-amber-400{border-color:#fbbf24}
 .border-blue-300{border-color:#93c5fd}
+.border-dashed{border-style:dashed}
 .border-gray-200{border-color:#e5e7eb}
 .border-gray-300{border-color:#d1d5db}
 .border-gray-400{border-color:#9ca3af}
@@ -83,11 +86,14 @@ table{border-collapse:collapse}
 .grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .grid{display:grid}
 .hidden{display:none}
+.italic{font-style:italic}
 .items-baseline{align-items:baseline}
 .items-center{align-items:center}
 .items-start{align-items:flex-start}
 .justify-between{justify-content:space-between}
+.justify-center{justify-content:center}
 .max-w-2xl{max-width:42rem}
+.max-w-xs{max-width:20rem}
 .mb-1{margin-bottom:0.25rem}
 .mb-2{margin-bottom:0.5rem}
 .mb-3{margin-bottom:0.75rem}
@@ -95,10 +101,12 @@ table{border-collapse:collapse}
 .ml-2{margin-left:0.5rem}
 .mt-1{margin-top:0.25rem}
 .mt-2{margin-top:0.5rem}
+.mt-3{margin-top:0.75rem}
 .mt-4{margin-top:1rem}
 .mt-6{margin-top:1.5rem}
 .mx-auto{margin-left:auto;margin-right:auto}
 .opacity-60{opacity:.6}
+.opacity-80{opacity:.8}
 .p-1{padding:0.25rem}
 .p-2{padding:0.5rem}
 .p-3{padding:0.75rem}
@@ -107,6 +115,7 @@ table{border-collapse:collapse}
 .p-6{padding:1.5rem}
 .p-8{padding:2rem}
 .pt-2{padding-top:0.5rem}
+.px-1{padding-left:0.25rem;padding-right:0.25rem}
 .px-2{padding-left:0.5rem;padding-right:0.5rem}
 .px-3{padding-left:0.75rem;padding-right:0.75rem}
 .px-4{padding-left:1rem;padding-right:1rem}
@@ -122,12 +131,14 @@ table{border-collapse:collapse}
 .space-y-2>*+*{margin-top:0.5rem}
 .space-y-3>*+*{margin-top:0.75rem}
 .text-2xl{font-size:1.5rem;line-height:2rem}
+.text-3xl{font-size:1.875rem;line-height:2.25rem}
 .text-amber-700{color:#b45309}
 .text-amber-800{color:#92400e}
 .text-amber-900{color:#78350f}
 .text-base{font-size:1rem;line-height:1.5rem}
 .text-blue-600{color:#2563eb}
 .text-blue-700{color:#1d4ed8}
+.text-blue-800{color:#1e40af}
 .text-center{text-align:center}
 .text-gray-400{color:#9ca3af}
 .text-gray-500{color:#6b7280}
@@ -149,6 +160,7 @@ table{border-collapse:collapse}
 .text-white{color:#ffffff}
 .text-xs{font-size:0.75rem;line-height:1rem}
 .to-gray-800{--tw-to:#1f2937}
+.underline{text-decoration:underline}
 .w-16{width:4rem}
 .w-20{width:5rem}
 .w-24{width:6rem}
@@ -1273,6 +1285,8 @@ function GeradorPropostas() {
   const [senhaNova, setSenhaNova] = useState('');
   const [senhaNovaConfirma, setSenhaNovaConfirma] = useState('');
   const [lixeiraAberta, setLixeiraAberta] = useState(false);
+  const [novaFuncaoNome, setNovaFuncaoNome] = useState('');
+  const [novaFuncaoValor, setNovaFuncaoValor] = useState('');
   const [propostaEditandoId, setPropostaEditandoId] = useState(null);
   const [destaque, setDestaque] = useState(null);
   const [carregando, setCarregando] = useState(true);
@@ -1283,10 +1297,30 @@ function GeradorPropostas() {
   const [revisao, setRevisao] = useState(null);
   const [textoColado, setTextoColado] = useState('');
   const arquivoRef = useRef(null);
+  // Guarda a LISTA COMPLETA de funções salvas como padrão (código, nome e
+  // valor da diária) — não só os valores. Sem isso, uma função criada pelo
+  // usuário (além de Engenheiro/Eletricista/Ajudante) não sobreviveria a
+  // "Nova proposta" nem a um recarregamento do app.
   const padroesRef = useRef({
-    servicos: {},
+    servicos: SERVICOS_INICIAL.map(s => ({
+      codigo: s.codigo,
+      descricao: s.descricao,
+      valorDiario: s.valorDiario
+    })),
     bdi: 0
   });
+
+  // Lista de funções para uma proposta nova: a salva como padrão (se houver
+  // alguma), senão as 3 de sempre. Sempre com "dias" zerado.
+  const listaServicosPadrao = () => {
+    const base = padroesRef.current.servicos.length > 0 ? padroesRef.current.servicos : SERVICOS_INICIAL;
+    return base.map(s => ({
+      codigo: s.codigo,
+      descricao: s.descricao,
+      valorDiario: s.valorDiario,
+      dias: 0
+    }));
+  };
   useEffect(() => {
     const carregar = async () => {
       // CORREÇÃO ÚNICA, roda antes de qualquer outra leitura: uma versão
@@ -1375,18 +1409,26 @@ function GeradorPropostas() {
         ...n,
         local: listaLocais[0]
       }));
-      if (padroes && padroes.servicos) {
-        const mapaValores = {};
-        padroes.servicos.forEach(s => {
-          mapaValores[s.codigo] = s.valorDiario;
+      if (padroes && Array.isArray(padroes.servicos) && padroes.servicos.length > 0) {
+        // Formato novo: lista completa (codigo, descricao, valorDiario).
+        // Se vier um backup do formato antigo (só codigo+valorDiario, sem
+        // descricao), completa com a descrição padrão quando reconhecida.
+        const porCodigoAntigo = {};
+        SERVICOS_INICIAL.forEach(s => {
+          porCodigoAntigo[s.codigo] = s.descricao;
         });
+        const listaCompleta = padroes.servicos.map(s => ({
+          codigo: s.codigo,
+          descricao: s.descricao || porCodigoAntigo[s.codigo] || 'Diária',
+          valorDiario: s.valorDiario
+        }));
         padroesRef.current = {
-          servicos: mapaValores,
+          servicos: listaCompleta,
           bdi: padroes.bdi || 0
         };
-        setServicos(SERVICOS_INICIAL.map(s => ({
+        setServicos(listaCompleta.map(s => ({
           ...s,
-          valorDiario: mapaValores[s.codigo] != null ? mapaValores[s.codigo] : s.valorDiario
+          dias: 0
         })));
         setBdi(padroes.bdi || 0);
       }
@@ -1913,6 +1955,27 @@ function GeradorPropostas() {
     [campo]: parseFloat(valor) || 0
   } : s));
 
+  // Cria uma nova função de mão de obra (além de Engenheiro/Eletricista/
+  // Ajudante), com código próprio para não colidir com as fixas nem com
+  // outras já criadas.
+  const adicionarFuncao = (nome, valorDiario) => {
+    const nomeLimpo = nome.trim();
+    if (!nomeLimpo) return avisar('erro', 'Digite o nome da função.');
+    const descricao = `Diária ${nomeLimpo}`;
+    if (servicos.some(s => s.descricao.toLowerCase() === descricao.toLowerCase())) {
+      return avisar('erro', 'Já existe uma função com esse nome.');
+    }
+    const nova = {
+      codigo: `SRV-${Date.now()}`,
+      descricao,
+      valorDiario: parseFloat(valorDiario) || 0,
+      dias: 0
+    };
+    setServicos([...servicos, nova]);
+    avisar('sucesso', `Função "${nomeLimpo}" adicionada.`);
+  };
+  const removerFuncao = codigo => setServicos(servicos.filter(s => s.codigo !== codigo));
+
   // ---------- ESTOQUE x COMPRAS ----------
   // Para cada item: quanto sai do estoque e como o restante é comprado
   // (podendo ser dividido entre várias lojas).
@@ -2062,13 +2125,23 @@ function GeradorPropostas() {
         baixado: !!salvo.baixado
       };
     }));
-    setServicos(SERVICOS_INICIAL.map(s => {
-      const salvo = (p.servicos || []).find(x => x.codigo === s.codigo);
-      return salvo ? {
-        ...s,
-        ...salvo
-      } : s;
-    }));
+    // Sempre mostra as funções do padrão atual (Engenheiro/Eletricista/
+    // Ajudante e quaisquer outras já "oficializadas") — sem isso, uma
+    // proposta que só usou 1 função faria as demais sumirem da tela, já
+    // que só é salvo quem teve dias>0. Por cima disso, aplica o que essa
+    // proposta específica realmente usou (dias e valor daquele momento),
+    // incluindo qualquer função que ela tinha e não faz mais parte do
+    // padrão atual.
+    const mapaServicos = {};
+    listaServicosPadrao().forEach(s => {
+      mapaServicos[s.codigo] = s;
+    });
+    (Array.isArray(p.servicos) ? p.servicos : []).forEach(s => {
+      mapaServicos[s.codigo] = {
+        ...s
+      };
+    });
+    setServicos(Object.values(mapaServicos));
     setBdi(p.bdi || 0);
     setAba('proposta');
   };
@@ -2103,24 +2176,18 @@ function GeradorPropostas() {
     setEndereco('');
     setTipoServico('');
     setProposta([]);
-    setServicos(SERVICOS_INICIAL.map(s => ({
-      ...s,
-      valorDiario: padroesRef.current.servicos[s.codigo] != null ? padroesRef.current.servicos[s.codigo] : s.valorDiario
-    })));
+    setServicos(listaServicosPadrao());
     setBdi(padroesRef.current.bdi || 0);
     setAba('catalogo');
   };
   const salvarComoPadrao = async () => {
     const servicosPadrao = servicos.map(s => ({
       codigo: s.codigo,
+      descricao: s.descricao,
       valorDiario: s.valorDiario
     }));
-    const mapaValores = {};
-    servicosPadrao.forEach(s => {
-      mapaValores[s.codigo] = s.valorDiario;
-    });
     padroesRef.current = {
-      servicos: mapaValores,
+      servicos: servicosPadrao,
       bdi
     };
     const ok = await salvarDado(CHAVE_PADROES, {
@@ -2207,6 +2274,7 @@ function GeradorPropostas() {
       padroes: {
         servicos: servicos.map(s => ({
           codigo: s.codigo,
+          descricao: s.descricao,
           valorDiario: s.valorDiario
         })),
         bdi: padroesRef.current.bdi || 0
@@ -2264,20 +2332,28 @@ function GeradorPropostas() {
 
         // Padrões de diária e BDI
         if (dados.padroes && Array.isArray(dados.padroes.servicos)) {
-          const mapa = {};
-          dados.padroes.servicos.forEach(s => {
-            mapa[s.codigo] = s.valorDiario;
+          const porCodigoAntigo = {};
+          SERVICOS_INICIAL.forEach(s => {
+            porCodigoAntigo[s.codigo] = s.descricao;
           });
+          const listaCompleta = dados.padroes.servicos.map(s => ({
+            codigo: s.codigo,
+            descricao: s.descricao || porCodigoAntigo[s.codigo] || 'Diária',
+            valorDiario: s.valorDiario
+          }));
           padroesRef.current = {
-            servicos: mapa,
+            servicos: listaCompleta,
             bdi: dados.padroes.bdi || 0
           };
-          setServicos(SERVICOS_INICIAL.map(s => ({
+          setServicos(listaCompleta.map(s => ({
             ...s,
-            valorDiario: mapa[s.codigo] != null ? mapa[s.codigo] : s.valorDiario
+            dias: 0
           })));
           setBdi(dados.padroes.bdi || 0);
-          await salvarDado(CHAVE_PADROES, dados.padroes);
+          await salvarDado(CHAVE_PADROES, {
+            servicos: listaCompleta,
+            bdi: dados.padroes.bdi || 0
+          });
           restaurado.push('padrões de diária/BDI');
         }
         avisar('sucesso', `Backup importado: ${restaurado.join(', ')}.`);
@@ -2313,10 +2389,7 @@ function GeradorPropostas() {
     onClick: () => pedirConfirmacao('limpar', () => {
       setPropostaEditandoId(null);
       setProposta([]);
-      setServicos(SERVICOS_INICIAL.map(s => ({
-        ...s,
-        valorDiario: padroesRef.current.servicos[s.codigo] != null ? padroesRef.current.servicos[s.codigo] : s.valorDiario
-      })));
+      setServicos(listaServicosPadrao());
       setBdi(padroesRef.current.bdi || 0);
       setNumProposta('');
       setCliente('');
@@ -3105,9 +3178,14 @@ function GeradorPropostas() {
   }, servicos.map(s => /*#__PURE__*/React.createElement("div", {
     key: s.codigo,
     className: "bg-white p-4 rounded-lg border-2 border-orange-300"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-2"
   }, /*#__PURE__*/React.createElement("p", {
-    className: "font-bold text-gray-800 mb-2"
-  }, s.descricao), /*#__PURE__*/React.createElement("div", {
+    className: "font-bold text-gray-800"
+  }, s.descricao), /*#__PURE__*/React.createElement("button", {
+    onClick: () => pedirConfirmacao(`func-${s.codigo}`, () => removerFuncao(s.codigo)),
+    className: `shrink-0 py-1 px-2 rounded text-xs font-bold text-white ${confirmando === `func-${s.codigo}` ? 'bg-red-800' : 'bg-red-500'}`
+  }, confirmando === `func-${s.codigo}` ? 'Confirmar?' : '🗑️')), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-2 gap-2"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     className: "block text-xs font-bold text-gray-600 mb-1"
@@ -3129,7 +3207,32 @@ function GeradorPropostas() {
     className: "text-sm bg-orange-50 p-2 rounded mt-2"
   }, "Total: ", /*#__PURE__*/React.createElement("span", {
     className: "font-bold text-orange-700"
-  }, "R$ ", (s.valorDiario * s.dias).toFixed(2)))))), senhaHash && /*#__PURE__*/React.createElement("button", {
+  }, "R$ ", (s.valorDiario * s.dias).toFixed(2)))))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white p-3 rounded-lg border-2 border-dashed border-orange-300 mt-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-bold text-gray-600 mb-2"
+  }, "➕ Adicionar outra função de mão de obra"), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, /*#__PURE__*/React.createElement("input", {
+    placeholder: "Nome da função (ex: Mestre de obras)",
+    value: novaFuncaoNome,
+    onChange: e => setNovaFuncaoNome(e.target.value),
+    className: "flex-1 p-2 border border-gray-300 rounded text-sm"
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    step: "0.01",
+    placeholder: "R$/dia",
+    value: novaFuncaoValor,
+    onChange: e => setNovaFuncaoValor(e.target.value),
+    className: "w-24 p-2 border border-gray-300 rounded text-sm"
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      adicionarFuncao(novaFuncaoNome, novaFuncaoValor);
+      setNovaFuncaoNome('');
+      setNovaFuncaoValor('');
+    },
+    className: "w-full mt-2 py-2 bg-orange-600 text-white rounded font-bold text-xs"
+  }, "Adicionar função")), senhaHash && /*#__PURE__*/React.createElement("button", {
     onClick: () => setDesbloqueado(false),
     className: "w-full mt-3 py-2 bg-gray-200 text-gray-700 rounded text-xs font-bold"
   }, "🔒 Bloquear de novo")), Totais(), Botoes(), PropostasSalvas()), aba === 'historico' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -3160,7 +3263,6 @@ function GeradorPropostasComProtecao() {
 ReactDOM.createRoot(document.getElementById('root')).render(
   React.createElement(GeradorPropostasComProtecao)
 );
-// Service worker: é ele que faz o app abrir sem internet
 if (navigator.serviceWorker && location.protocol === 'https:') {
   window.addEventListener('load', function () {
     try { navigator.serviceWorker.register('sw.js').catch(function () {}); } catch (e) {}
